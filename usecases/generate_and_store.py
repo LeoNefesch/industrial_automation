@@ -12,7 +12,7 @@ class GenerateAndStoreUseCase:
     def __init__(self, simulator: RandomSimulator) -> None:
         self._simulator = simulator
 
-    async def execute(self) -> None:
+    async def execute(self) -> list[Measurement]:
         now = datetime.now(timezone.utc)
         values = self._simulator.generate()
 
@@ -21,3 +21,4 @@ class GenerateAndStoreUseCase:
         async with get_uow() as uow:
             service = MeasurementService(uow.measurements)
             await service.save_measurements(measurements)
+        return measurements

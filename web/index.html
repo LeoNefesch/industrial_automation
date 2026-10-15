@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <title>Industrial Automation — live</title>
+    <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+    <style>
+        body { font-family: system-ui, sans-serif; margin: 0; padding: 20px; background: #1e1e1e; color: #ddd; }
+        h1 { margin-top: 0; font-size: 20px; font-weight: 500; }
+        h2 { margin: 24px 0 8px; font-size: 15px; font-weight: 500; color: #aaa; letter-spacing: 0.5px; text-transform: uppercase; }
+        #status { font-size: 13px; color: #888; margin-bottom: 10px; }
+        .chart { width: 100%; height: 320px; }
+    </style>
+</head>
+<body>
+    <h1>Тренды датчиков — live</h1>
+    <div id="status">Подключение…</div>
+
+    <h2>Temperature</h2>
+    <div id="chart-temperature" class="chart"></div>
+
+    <h2>Pressure</h2>
+    <div id="chart-pressure" class="chart"></div>
+
+    <h2>Flow rate</h2>
+    <div id="chart-flow_rate" class="chart"></div>
+
+    <script>
+        const SENSORS = ['temperature', 'pressure', 'flow_rate'];
+        const COLORS = {
+            temperature: '#e74c3c',
+            pressure:    '#3498db',
+            flow_rate:   '#2ecc71',
+        };
+        // 1 час × 60 сек / 5 сек = 720 точек. Держим ровно столько.
+        // Уменьшите константу, если хотите короче окно (например, 180 = 15 минут).
+        const MAX_POINTS = 720;
+
+        const layoutFor = () => ({
+            paper_bgcolor: '#1e1e1e',
+            plot_bgcolor: '#1e1e1e',
+            font: { color: '#ddd' },
+            xaxis: { gridcolor: '#333', title: 'Время' },
+            yaxis: { gridcolor: '#333', title: 'Значение' },
+            margin: { l: 50, r: 20, t: 10, b: 40 },
+            showlegend: false,
+        });
+
+        // Инициализация: каждому датчику — свой div и своя трасса.
+        for (const s of SENSORS) {
+            Plotly.newPlot(
+                `chart-${s}`,
+                [{
+                    x: [],
+                    y: [],
+                    mode: 'lines+markers',
+                    name: s,
+                    line: {
+                        color: COLORS[s],
+                        width: 2,
+                        shape: 'spline',
+                        smoothing: 1,
+                    },
+                    marker: { size: 5 },
+                }],
+                layoutFor(),
+                { responsive: true, displaylogo: false },
+            );
+        }
+
+        function appendPoints(points) {
+            const byId = {};
+            for (const p of points) {
+                if (!SENSORS.includes(p.sensor_id)) continue;
+                (byId[p.sensor_id] ||= []).push(p);
+            }
+            for (const [sid, arr] of Object.entries(byId)) {
+                // maxPoints обрезает старые точки автоматически.
+                Plotly.extendTraces(
+                    `chart-${sid}`,
+                    { x: [arr.map(p => p.time)], y: [arr.map(p => p.value)] },
+                    [0],
+                    MAX_POINTS,
+                );
+            }
+        }
+
+        const statusEl = document.getElementById('status');
+        const wsProto = location.protocol === 'https:' ? 'wss' : 'ws';
+        const ws = new WebSocket(`${wsProto}://${location.host}/ws`);
+
+        ws.onopen = () => { statusEl.textContent = 'WebSocket подключён'; };
+        ws.onclose = () => { statusEl.textContent = 'WebSocket отключён'; };
+        ws.onerror = () => { statusEl.textContent = 'Ошибка WebSocket'; };
+
+        ws.onmessage = (ev) => {
+            const msg = JSON.parse(ev.data);
+            if (msg.type === 'init') {
+                statusEl.textContent = `Загружено ${msg.data.length} точек истории`;
+                appendPoints(msg.data);
+            } else if (msg.type === 'update') {
+                appendPoints(msg.data);
+            }
+        };
+    </script>
+</body>
+</html>
