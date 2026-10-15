@@ -1,0 +1,31 @@
+exclude: '(^migrations/|^alembic/|^\.venv/|alembic\.ini$|^docs/)'
+default_stages: [pre-commit]
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-merge-conflict
+      - id: detect-private-key
+      - id: debug-statements
+
+  - repo: local
+    hooks:
+      - id: ruff
+        name: ruff lint & fix
+        entry: uv run ruff check --fix --exit-non-zero-on-fix --statistics --verbose
+        language: system
+        types: [python]
+        require_serial: true
+
+  - repo: local
+    hooks:
+      - id: ruff-format
+        name: ruff format
+        entry: uv run ruff format --verbose
+        language: system
+        types: [python]
+        require_serial: true

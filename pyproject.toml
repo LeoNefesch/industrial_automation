@@ -1,0 +1,61 @@
+[project]
+name = "industrial-automation"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "alembic>=1.20.0",
+    "asyncpg>=0.32.0",
+    "asyncua>=2.1.0",
+    "granian>=2.8.4",
+    "matplotlib>=3.11.2",
+    "pandas>=3.0.6",
+    "plotly>=7.1.0",
+    "pydantic-settings>=2.16.0",
+    "pymodbus>=3.16.1",
+    "sqlalchemy[asyncio]>=2.1.4",
+    "starlette>=1.8.0",
+]
+
+[dependency-groups]
+dev = [
+    "mypy>=2.4.0",
+    "pre-commit>=4.7.0",
+    "ruff>=0.17.0",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+exclude = [
+    "migrations",
+    "alembic",
+    ".venv",
+    "alembic.ini",
+    "docs",
+]
+
+[tool.ruff.lint]
+select = ["I"]
+
+[tool.ruff.lint.isort]
+split-on-trailing-comma = true
+force-single-line = false
+lines-after-imports = 2
+lines-between-types = 0
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
+exclude = ["migrations", "alembic", ".venv", "alembic.ini", "docs"]
+plugins = ["pydantic.mypy"]
+
+[tool.uv]
+link-mode = "copy"

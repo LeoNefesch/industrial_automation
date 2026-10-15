@@ -1,0 +1,48 @@
+services:
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: industrial
+    ports:
+      - "5432:5432"
+    volumes:
+      - timescale_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build: .
+    environment:
+      DB_HOST: timescaledb
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_NAME: industrial
+      MODBUS_HOST: modbus-sim
+      OPCUA_URL: opc.tcp://opcua-sim:4840
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+      - /app/.venv
+
+  modbus-sim:
+    image: oitc/modbus-server:latest
+    ports:
+      - "502:5020"
+
+  opcua-sim:
+    image: intel/ia-opcua-server:2026.2.0-20260707-weekly
+    ports:
+      - "4840:4840"
+
+volumes:
+  timescale_data:
