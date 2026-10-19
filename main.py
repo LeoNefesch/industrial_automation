@@ -5,21 +5,21 @@ from starlette.applications import Starlette
 from starlette.responses import HTMLResponse
 from starlette.routing import Mount, Route
 
-from core.constants import INTERVAL_SECONDS, SENSORS
+from core.constants import INTERVAL_SECONDS
 from core.logger import logger
-from simulator.random_simulator import RandomSimulator
-from usecases.generate_and_store import GenerateAndStoreUseCase
+from protocols.modbus_client import ModbusDataSource
+from usecases.collect_and_store import CollectAndStoreUseCase
 from visual.bokeh_app import BokehDashboard
 
 
 dashboard = BokehDashboard()
-use_case = GenerateAndStoreUseCase(RandomSimulator(SENSORS))
 
 
-async def _generate_loop() -> None:
+async def _generate_loop(app: Starlette) -> None:
     logger.info("[generator] started")
     while True:
         try:
+            use_case: CollectAndStoreUseCase = app.state.use_case
             measurements = await use_case.execute()
             await dashboard.push(measurements)
         except Exception as exc:
@@ -29,8 +29,12 @@ async def _generate_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(app: Starlette):
+    source = ModbusDataSource()
+    await source.connect()
+    app.state.use_case = CollectAndStoreUseCase(source)
+    app.state.generator_task = asyncio.create_task(_generate_loop(app))
     await dashboard.start()
-    app.state.generator_task = asyncio.create_task(_generate_loop())
+
     try:
         yield
     finally:
@@ -39,6 +43,7 @@ async def lifespan(app: Starlette):
             await app.state.generator_task
         except asyncio.CancelledError:
             pass
+        await source.close()
         await dashboard.stop()
 
 

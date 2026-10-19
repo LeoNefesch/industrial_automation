@@ -50,7 +50,7 @@ class BokehDashboard:
 
     @staticmethod
     def _build_document(doc: Document) -> None:
-        """Создать документ с тремя графиками. Вызывается Bokeh на каждую сессию."""
+        """Создать документ с графиками для сенсоров из списка SENSORS. Вызывается Bokeh на каждую сессию."""
         sources: dict[str, ColumnDataSource] = {}
 
         for sensor_id in SENSORS:

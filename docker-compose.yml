@@ -24,20 +24,37 @@ services:
       DB_PASSWORD: postgres
       DB_NAME: industrial
       MODBUS_HOST: modbus-sim
-      OPCUA_URL: opc.tcp://opcua-sim:4840
+      MODBUS_PORT: 502
+      MODBUS_UNIT_ID: 1
+#      MODBUS_TEMP_REGISTER: 1
+#      MODBUS_SCALE: 10.0
+#      OPCUA_URL: opc.tcp://opcua-sim:4840
     depends_on:
       timescaledb:
         condition: service_healthy
+      modbus-sim:
+        condition: service_started
     ports:
       - "8000:8000"
     volumes:
       - .:/app
       - /app/.venv
 
+#  modbus-sim:
+#    image: oitc/modbus-server:latest
+#    ports:
+#      - "502:5020"
   modbus-sim:
-    image: oitc/modbus-server:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    entrypoint: [ "python", "scripts/modbus_sim.py" ]
+    restart: unless-stopped
     ports:
-      - "502:5020"
+      - "502:502"
+    volumes:
+      - .:/app
+      - /app/.venv
 
   opcua-sim:
     image: intel/ia-opcua-server:2026.2.0-20260707-weekly

@@ -32,6 +32,10 @@ class ModbusSettings(BaseSettings):
     port: int = 502
     unit: int = 1
     timeout: float = 3.0
+    temp_register: int = 1
+    hum_register: int = 2
+    scale: float = 10.0
+    unit_id: int = 1
 
 
 class OpcUaSettings(BaseSettings):
