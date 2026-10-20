@@ -30,7 +30,7 @@ class ModbusDataSource(SensorDataSource):
             self._client = None
 
     async def read_all(self) -> dict[str, float]:
-        if not await self.connect():
+        if not await self.connect() or self._client is None:
             return {}
         try:
             rr = await self._client.read_holding_registers(
