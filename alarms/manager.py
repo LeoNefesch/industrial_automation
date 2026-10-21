@@ -2,21 +2,21 @@ from datetime import datetime, timezone
 
 from core.logger import logger
 
-from .models import Alarm, AlarmState
+from .models import Alarm, AlarmEventRecord, AlarmState
 
 
 class AlarmManager:
     def __init__(self, alarms: dict[str, Alarm]):
         self._alarms = alarms
-        self._history: list[dict] = []  # для event log
+        self._history: list[AlarmEventRecord] = []
 
-    def process(self, sensor_id: str, value: float) -> list[dict]:
+    def process(self, sensor_id: str, value: float) -> list[AlarmEventRecord]:
         """Проверить значение по уставке. Неизвестный датчик — не ошибка, а «нет аларма»."""
         alarm = self._alarms.get(sensor_id)
         if alarm is None:
             logger.warning(f"Alarm {sensor_id} not found")
             return []
-        events: list[dict] = []
+        events: list[AlarmEventRecord] = []
 
         if alarm.state == AlarmState.NORMAL:
             if alarm.high is not None and value > alarm.high:
@@ -53,12 +53,14 @@ class AlarmManager:
         self._history.append(self._event(alarm, "ALARM_ACKED", None))
         return True
 
-    def _event(self, alarm: Alarm, kind: str, value: float | None) -> dict:
-        return {
-            "time": datetime.now(timezone.utc).isoformat(),
-            "sensor_id": alarm.sensor_id,
-            "event": kind,
-            "state": alarm.state.value,
-            "value": value,
-            "priority": alarm.priority,
-        }
+    def _event(self, alarm: Alarm, kind: str, value: float | None) -> AlarmEventRecord:
+        return AlarmEventRecord(
+            time=datetime.now(timezone.utc),
+            sensor_id=alarm.sensor_id,
+            event=kind,
+            state=alarm.state.value,
+            value=value,
+            priority=alarm.priority,
+            ack_user=alarm.ack_user,
+            ack_time=alarm.ack_time,
+        )

@@ -27,3 +27,17 @@ class Alarm:
     active_since: datetime | None = None  # UTC-момент выхода за уставку
     ack_time: datetime | None = None  # UTC-момент квитирования
     ack_user: str | None = None  # кто квитировал (для аудита)
+
+
+@dataclass
+class AlarmEventRecord:
+    """Типизированное событие аларма для сохранения в БД."""
+
+    time: datetime
+    sensor_id: str
+    event: str
+    state: str
+    value: float | None
+    priority: str
+    ack_user: str | None = None
+    ack_time: datetime | None = None

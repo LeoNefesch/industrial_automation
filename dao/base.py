@@ -4,7 +4,7 @@ from typing import Optional, Sequence
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.models import Measurement
+from db.models import AlarmEvent, Measurement
 
 
 class AbstractMeasurementDAO(ABC):
@@ -27,3 +27,8 @@ class AbstractMeasurementDAO(ABC):
         start: datetime,
         end: datetime,
     ) -> Sequence[Measurement]: ...
+
+
+class AbstractAlarmEventDAO(ABC):
+    @abstractmethod
+    async def insert_many(self, events: list[AlarmEvent]) -> None: ...

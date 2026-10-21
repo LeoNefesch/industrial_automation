@@ -1,19 +1,19 @@
 # industrial_automation — мини-SCADA на Python
 
-Pet-проект по теме «Python в промышленной автоматизации»: упрощённая SCADA-система для одного датчика.
-Демонстрирует сбор данных по Modbus TCP, хранение временных рядов в TimescaleDB, систему алармов с гистерезисом и квитированием,
-планировщик задач на APScheduler и веб-панель с трендами.
+Pet-проект по теме «Python в промышленной автоматизации»: упрощённая SCADA-система для сбора данных с промышленного оборудования.
+Демонстрирует сбор данных по Modbus TCP, хранение временных рядов в TimescaleDB, систему алармов с гистерезисом и квитированием, а также веб-панель (HMI) с трендами на Bokeh. Архитектура разделена на независимые сервисы сбора данных и визуализации.
 
 ---
 
 ## Что делает проект
 
-1. **Собирает измерения с Modbus TCP-устройства** (симулятор на `pymodbus`) и сохраняет их в TimescaleDB.
+1. **Собирает измерения с Modbus TCP-устройства** (симулятор на `pymodbus`) и сохраняет их в TimescaleDB. Этим занимается отдельный сервис `worker`.
 2. **Проверяет уставки алармов** на каждом новом измерении. Аларм имеет состояние (`NORMAL`, `ACTIVE_UNACK`, `ACTIVE_ACK`), приоритет и гистерезис (deadband), чтобы не «дребезжать» около порога.
-3. **Позволяет квитировать алармы** через REST API (`POST /api/alarms/{sensor_id}/ack`). Квитирование фиксирует пользователя и время — как в настоящей SCADA.
-4. **Планирует сбор данных через APScheduler**, а не через ручной `asyncio.sleep`. Интервал и расписание можно менять без правки бизнес-логики.
-5. **Отображает тренды в Bokeh** и обновляет их в реальном времени через `dashboard.push(...)`.
-6. **Демонстрирует архитектурные слои**: DAO, services, usecases, Unit of Work, настройки через `pydantic-settings`, миграции Alembic.
+3. **Ведёт журнал событий (Event Log)**: все переходы состояний алармов сохраняются в таблицу `alarm_events` в базе данных.
+4. **Позволяет квитировать алармы** через REST API (`POST /api/alarms/{sensor_id}/ack`). Квитирование фиксирует пользователя и время — как в настоящей SCADA.
+5. **Планирует сбор данных через APScheduler** внутри воркера. Задачи изолированы от веб-сервера, что исключает их дублирование при масштабировании.
+6. **Отображает тренды в Bokeh**. Веб-сервис (`web`) раз в 2 секунды опрашивает БД на предмет новых данных и обновляет графики без перезагрузки страницы.
+7. **Демонстрирует архитектурные слои**: DAO, services, usecases, Unit of Work, настройки через `pydantic-settings`, миграции Alembic.
 
 ---
 
@@ -24,7 +24,7 @@ Pet-проект по теме «Python в промышленной автома
 | ASGI-сервер | Granian |
 | Веб-фреймворк | FastAPI |
 | Планировщик | APScheduler (`AsyncIOScheduler`) |
-| БД | PostgreSQL + TimescaleDB |
+| БД | PostgreSQL 18 + TimescaleDB |
 | Драйвер БД | `asyncpg` + SQLAlchemy 2.x (async) |
 | Миграции | Alembic (async) |
 | Настройки | `pydantic-settings` |
@@ -37,72 +37,84 @@ Pet-проект по теме «Python в промышленной автома
 
 ## Архитектура
 
-┌─────────────┐ Modbus TCP ┌──────────────────┐
-│ modbus-sim │ ◄────────────────── │ ModbusDataSource │
-└─────────────┘ └────────┬─────────┘
-│ read_all()
-▼
-┌─────────────────────┐
-│ CollectAndStoreUseCase│
-└──────────┬──────────┘
-│
-┌───────────────────────┼───────────────────────┐
-▼ ▼ ▼
-┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐
-│ MeasurementService│ │ AlarmManager │ │ BokehDashboard │
-│ (historian) │ │ (alarms/events) │ │ (HMI/trends) │
-└────────┬──────────┘ └────────┬─────────┘ └─────────────────┘
-│ │
-▼ ▼
-┌─────────────────┐ ┌─────────────────┐
-│ TimescaleDB │ │ alarm_events │
-│ (measurements) │ │ (event log) │
-└─────────────────┘ └─────────────────┘
+Проект разделён на два независимых процесса, использующих общую базу данных и один Docker-образ.
+
+```text
+┌──────────────────────────────────────────────────────────────┐
+│                         worker (APScheduler)                 │
+│  ModbusDataSource ──► CollectAndStoreUseCase ──► TimescaleDB │
+│                            │                                 │
+│                            ▼                                 │
+│                       AlarmManager ───────────► alarm_events │
+└──────────────────────────────────────────────────────────────┘
+                                │
+                         (Единая БД)
+                                │
+┌──────────────────────────────────────────────────────────────┐
+│                         web (FastAPI + Bokeh)                │
+│                                                              │
+│  GET /api/alarms ──────► Список алармов                      │
+│  POST /api/alarms/{id}/ack ──► Квитирование                  │
+│                                                              │
+│  _poll_and_push() ──► SELECT из TimescaleDB ──► Bokeh HMI    │
+└──────────────────────────────────────────────────────────────┘
+```
 
 **Ключевые компоненты:**
 
-- **`AlarmManager`** — конечный автомат алармов. Хранит активные алармы в памяти, пишет события в журнал.
-- **`APScheduler`** — запускает `collect_and_check` каждые `INTERVAL_SECONDS`. Позже сюда добавляются retention-задачи и cron-агрегаты.
-- **`BokehDashboard`** — HMI с трендами. Для реального времени использует `push()`; альтернатива — WebSocket.
-- **TimescaleDB** — historian: гипертаблица `measurements` с партиционированием по времени.
+- **`worker`** — автономный процесс. Раз в `INTERVAL_SECONDS` читает регистры Modbus, сохраняет данные в БД, прогоняет их через `AlarmManager` и записывает возникшие события алармов в `alarm_events`.
+- **`web`** — FastAPI-приложение. Содержит эндпойнты для работы с алармами и веб-сервер Bokeh. В фоне работает корутина `_poll_and_push`, которая забирает свежие данные из БД и обновляет графики в активных сессиях браузера.
+- **TimescaleDB** — historian: гипертаблица `measurements` (для метрик) и таблица `alarm_events` (для журнала событий). В качестве первичного ключа в `alarm_events` используется нативный `uuidv7()` (доступен в PostgreSQL 18), что обеспечивает монотонность и быструю вставку.
 
 ---
 
-## Структура
+## Структура проекта
 
-```
+```text
 industrial_automation/
-├── alarms/
-│ ├── models.py # Alarm, AlarmState
-│ ├── manager.py # AlarmManager: process(), acknowledge()
-│ └── config.py # Уставки алармов
-├── api/
-│ └── alarms.py # REST для списка и квитирования
-├── core/
-│ ├── constants.py
-│ ├── data_source.py                 # Protocol SensorDataSource
-│ ├── logger.py
-│ └── settings.py                    # Глобальный экземпляр Settings
-├── db/
-│   ├── models.py                    # SQLAlchemy-модель Measurement
-│   └── session.py                   # async engine + session factory
-├── dao/
-│   ├── base.py                      # ABC MeasurementDAO
-│   └── measurement.py               # Реализация
-├── services/measurement_service.py  # Сервисный слой
-├── usecases/collect_and_store.py
-├── dependencies/uow.py              # Unit of Work с автокоммитом
-├── protocols/
-│   ├── modbus_client.py             # Заготовка pymodbus (async)
-│   └── opcua_client.py              # Заготовка asyncua
-├── visual/bokeh_app.py              # Bokeh
-├── migrations/                      # Alembic (async)
-├── main.py                          # Starlette app + фоновая задача
-├── Dockerfile
+├── alarms/                      # Домен алармов
+│   ├── config.py                # Уставки (high, low, deadband)
+│   ├── manager.py               # Конечный автомат, обработка гистерезиса
+│   └── models.py                # Alarm, AlarmState, AlarmEventRecord
+├── api/                         # REST API (FastAPI роутеры)
+│   ├── alarms.py                # Эндпойнты алармов
+│   ├── bokeh.py                 # Монтирование Bokeh ASGI и редирект
+│   └── __init__.py              # Сборка всех роутеров
+├── core/                        # Ядро и конфигурация
+│   ├── constants.py
+│   ├── data_source.py           # Protocol SensorDataSource
+│   ├── logger.py
+│   └── settings.py              # pydantic-settings
+├── dao/                         # Data Access Objects
+│   ├── base.py                  # ABC для DAO
+│   ├── measurement.py           # Работа с measurements
+│   └── alarm_event.py           # Работа с alarm_events
+├── db/                          # Слой базы данных
+│   ├── models.py                # SQLAlchemy модели
+│   └── session.py               # async engine + session factory
+├── dependencies/
+│   └── uow.py                   # Unit of Work
+├── migrations/                  # Alembic (async)
+├── protocols/                   # Промышленные протоколы
+│   ├── modbus_client.py         # Реализация Modbus TCP
+│   └── opcua_client.py          # Заготовка для OPC UA
+├── scripts/
+│   ├── apply_migrations.sh      # Миграции при старте
+│   └── modbus_sim.py            # Симулятор Modbus-устройства
+├── services/                    # Сервисный слой
+│   ├── measurement_service.py
+│   └── alarm_event_service.py
+├── usecases/                    # Сценарии использования (Use Cases)
+│   ├── collect_and_store.py     # Сбор и сохранение данных
+│   └── save_alarm_events.py     # Сохранение событий алармов
+├── visual/
+│   └── bokeh_app.py             # HMI: создание графиков и BokehASGI
+├── main.py                      # Точка входа FastAPI (web)
+├── worker.py                    # Точка входа воркера (сбор данных)
 ├── docker-compose.yml
+├── Dockerfile
 ├── pyproject.toml
-├── alembic.ini
-└── .env.example
+└── alembic.ini
 ```
 
 ---
@@ -122,36 +134,35 @@ cp .env.example .env
 ### 2. Запуск в Docker
 
 ```bash
-docker compose up --build
+docker compose up --build -d
 ```
 
-Поднимутся четыре контейнера:
+Поднимутся следующие сервисы:
 
 | Сервис | Назначение | Порт |
 |---|---|---|
-| `timescaledb` | Historian (TimescaleDB) | 5432 |
-| `app` | ASGI-приложение с генератором и веб-интерфейсом | 8000 |
-| `modbus-sim` | Modbus TCP симулятор (в текущей версии не используется) | 5020 |
-| `opcua-sim` | OPC UA симулятор (в текущей версии не используется) | 4840 |
+| `timescaledb` | Historian (PostgreSQL 18 + TimescaleDB) | 5432 |
+| `web` | FastAPI + HMI (Bokeh) | 8000 |
+| `worker` | Фоновый сбор данных и проверка алармов | — |
+| `modbus-sim` | Симулятор датчиков (Modbus TCP) | 502 |
+| `opcua-sim` | Заготовка OPC UA-сервера | 4840 |
 
-### 3. Применение миграций
+> **Важно:** проект использует PostgreSQL 18 (образ `timescale/timescaledb:latest-pg18-oss`). Том с данными монтируется в `/var/lib/postgresql` (а не `.../data`), так как с 18-й версии изменилась структура каталогов. Это позволяет использовать функцию `uuidv7()` для генерации ID событий.
 
-Миграции применяются в скрипте [apply_migrations.sh](scripts/apply_migrations.sh)
+### 3. Создание и применение миграций
 
-Проверка гипертаблицы:
+Миграции применяются автоматически при старте контейнера `web` через скрипт `apply_migrations.sh`.
 
+Если вы изменили модели SQLAlchemy, создайте новую миграцию, выполнив команду в работающем контейнере:
 ```bash
-docker compose exec timescaledb psql -U postgres -d industrial -c \
-  "SELECT hypertable_name FROM timescaledb_information.hypertables;"
+docker compose exec web alembic revision --autogenerate -m "описание изменений"
+```
+Или в одноразовом (чтобы не зависеть от состояния основного):
+```bash
+docker compose run --rm --entrypoint="" web alembic revision --autogenerate -m "описание"
 ```
 
-Ожидаемый вывод:
-
-```
- hypertable_name
------------------
- measurements
-```
+После создания миграции перезапустите `web` (или выполните `alembic upgrade head`), чтобы применить её.
 
 ### 4. Остановка
 
@@ -164,123 +175,78 @@ docker compose down -v       # остановить и удалить том с 
 
 ## Что и где наблюдать
 
-### Веб-интерфейс — `http://localhost:8000`
+### Веб-интерфейс (HMI) — `http://localhost:8000`
 
-Одна страница с тремя графиками Plotly (по одному на датчик): `temperature`, `pressure`, `flow_rate`. Данные за последний час.
+Автоматический редирект на `/bokeh/plot`. Вы увидите два графика (температура и влажность), обновляющихся в реальном времени по мере поступления данных из БД.
 
-При первом заходе сразу после старта может показаться «Нет данных» — фоновый генератор пишет первую партию через ~1 секунду после запуска. Обновите страницу.
+### API Алармов
 
-### Логи генератора
+- **Получить статус всех алармов:**
+  `GET http://localhost:8000/api/alarms`
+- **Квитировать аларм (Acknowledge):**
+  `POST http://localhost:8000/api/alarms/temperature/ack?user=operator`
+  *Если аларм активен и ещё не квитирован, вернёт `{"ok": true}`.*
+
+### Логи
 
 ```bash
-docker compose logs -f app
+docker compose logs -f worker  # Логи сбора данных и алармов
+docker compose logs -f web     # Логи FastAPI и Bokeh
 ```
 
 ### Данные в БД
 
 Подключение извне (DBeaver, psql):
+- host: `localhost`, port: `5432`
+- database: `industrial`, user: `postgres`, password: `postgres`
 
-- host: `localhost`
-- port: `5432`
-- database: `industrial`
-- user: `postgres`
-- password: `postgres`
-
-Проверка количества строк:
-
+Проверка журнала алармов:
 ```bash
 docker compose exec timescaledb psql -U postgres -d industrial \
-  -c "SELECT sensor_id, count(*), max(time) FROM measurements GROUP BY sensor_id;"
-```
-
-Список чанков гипертаблицы:
-
-```bash
-docker compose exec timescaledb psql -U postgres -d industrial \
-  -c "SELECT chunk_name, range_start, range_end FROM timescaledb_information.chunks;"
+  -c "SELECT time, sensor_id, event, value FROM alarm_events ORDER BY time DESC LIMIT 10;"
 ```
 
 ---
 
 ## Разработка
 
-### Установка окружения
-
+### Установка окружения (без Docker)
 ```bash
 uv sync
 ```
 
-### Генерация новой миграции
-
-```bash
-uv run alembic revision --autogenerate -m "описание"
-```
-
-После автогенерации **обязательно просмотрите файл вручную** — Alembic не понимает `create_hypertable` и не умеет отслеживать изменения гипертаблиц. Если миграция создаёт новую таблицу для временных рядов, добавьте в `upgrade()`:
-
-```python
-op.execute(
-    "SELECT create_hypertable('<table>', '<time-column>', if_not_exists => TRUE)"
-)
-```
-
-### Форматирование и типы
-
+### Форматирование и проверка типов
 ```bash
 uv run ruff check .
 uv run ruff format .
 uv run mypy .
 ```
 
-### Тесты
-
-Пока отсутствуют. Моковые тесты для DAO и сервисов — в TODO.
-
----
-
-## Конфигурация
-
-Все настройки читаются из `.env` через `pydantic-settings`. Префиксы:
-
-- `DB_*` — подключение к БД
-- `MODBUS_*` — параметры Modbus-клиента
-- `OPCUA_*` — параметры OPC UA-клиента
-
-Значения по умолчанию заданы в `core/settings.py` и подходят для запуска через `docker-compose.yml` без `.env`.
-
 ---
 
 ## TODO
 
-### Реальный сбор данных
+### Реальный сбор данных и протоколы
+- [ ] Реализовать интеграцию по протоколу **OPC UA** с использованием `asyncua` (сейчас есть только клиент-заготовка).
+- [ ] Реализовать логику ретраев (retry) и таймаутов при обрыве соединения с физическим оборудованием.
+- [ ] Поддержать чтение с реального устройства (Modbus RTU / USB-RS485).
 
-- [ ] Переключить `GenerateAndStoreUseCase` на `CollectAndStoreUseCase`, который читает с Modbus и OPC UA.
-- [ ] Заменить тестовые симуляторы в `docker-compose.yml` на рабочие образы: сейчас `oitc/modbus-server` слушает порт 5020, а не 502; `intel/ia-opcua-server` ждёт отсутствующий сервис. Подобрать альтернативы или поднять локальные симуляторы на `pymodbus`/`asyncua`.
-- [ ] Реализовать ретраи и таймауты при обрыве соединения с устройствами.
-- [ ] Поддержать чтение с физического датчика (например, через Modbus RTU / USB-RS485).
-
-### Веб-интерфейс
-
-- [ ] Диапазон времени настраивать через query-параметры: `?start=...&end=...`.
-- [ ] Отдельная страница с детальным графиком одного датчика.
-- [ ] Кнопка «Экспорт в CSV / XLSX».
+### Визуализация (HMI)
+- [ ] **Мнемосхема оборудования**: реализовать визуализацию технологического процесса (как в настоящей SCADA) с использованием библиотек вроде `pyscada` (или Drawflow/GoJS для фронтенда).
+- [ ] Настройка диапазона времени на графиках через query-параметры: `?start=...&end=...`.
+- [ ] Отображение списка активных алармов и журнала событий прямо на веб-странице (вместо чтения логов).
 
 ### Данные и аналитика
-
-- [ ] Непрерывные агрегаты TimescaleDB: средние/мин/макс за минуту, час, сутки.
-- [ ] Политика сжатия и retention policy для старых чанков.
-- [ ] Алерты: уведомление при выходе значения за пределы диапазона.
-- [ ] Таблица `sensors` со справочником датчиков (единицы измерения, границы, описание).
+- [ ] Непрерывные агрегаты TimescaleDB: средние/мин/макс за минуту, час, сутки для ускорения загрузки графиков.
+- [ ] Политика сжатия (compression) и удаления (retention policy) старых чанков.
+- [ ] Интеграция уведомлений во внешние системы (Telegram, Email) при `ACTIVE_UNACK` дольше N минут.
 
 ### Качество
-
-- [ ] Тесты: unit для DAO/сервисов, integration через `testcontainers` или in-memory SQLite.
-- [ ] Структурированное логирование через `structlog`.
-- [ ] Метрики Prometheus (счётчик записанных измерений, латентность запросов).
+- [ ] Тесты: unit для `AlarmManager` (граничные случаи гистерезиса), integration через `testcontainers`.
+- [ ] Метрики Prometheus (счётчик записанных измерений, латентность).
 - [ ] CI на GitHub Actions: `ruff` + `mypy` + `pytest`.
-- [ ] Healthcheck-endpoint `/healthz`.
+- [ ] Healthcheck-endpoint `/healthz` (проверка БД и Modbus).
 
 ### Архитектура
-
-- [ ] Поддержка нескольких источников данных с общим интерфейсом `DataSource` (Modbus, OPC UA, MQTT).
+- [ ] Поддержка нескольких источников данных с общим интерфейсом `DataSource` (Modbus + OPC UA + MQTT).
 - [ ] Plugin-механизм для подключения новых протоколов без изменения ядра.

@@ -3,7 +3,8 @@ from typing import AsyncIterator
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from dao.base import AbstractMeasurementDAO
+from dao.alarm_event import AlarmEventDAO
+from dao.base import AbstractAlarmEventDAO, AbstractMeasurementDAO
 from dao.measurement import MeasurementDAO
 from db.session import async_session_factory
 
@@ -14,6 +15,7 @@ class UnitOfWork:
     def __init__(self, session: AsyncSession):
         self._session = session
         self.measurements: AbstractMeasurementDAO = MeasurementDAO(session)
+        self.alarm_events: AbstractAlarmEventDAO = AlarmEventDAO(session)
 
     async def commit(self) -> None:
         await self._session.commit()
