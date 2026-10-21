@@ -4,9 +4,11 @@ version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
     "alembic>=1.20.0",
+    "apscheduler>=3.11.3",
     "asyncpg>=0.32.0",
     "asyncua>=2.1.0",
     "bokeh>=3.10.1",
+    "fastapi>=0.156.8",
     "granian>=2.8.4",
     "pydantic-settings>=2.16.0",
     "pymodbus>=3.16.1",

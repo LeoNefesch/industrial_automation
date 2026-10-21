@@ -15,8 +15,9 @@ services:
       timeout: 5s
       retries: 5
 
-  app:
+  web:
     build: .
+    image: industrial-automation:latest
     environment:
       DB_HOST: timescaledb
       DB_PORT: 5432
@@ -39,6 +40,28 @@ services:
     volumes:
       - .:/app
       - /app/.venv
+
+  worker:
+    image: industrial-automation:latest
+    entrypoint: []
+    environment:
+      DB_HOST: timescaledb
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_NAME: industrial
+      MODBUS_HOST: modbus-sim
+      MODBUS_PORT: 502
+      MODBUS_UNIT_ID: 1
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      modbus-sim:
+        condition: service_started
+    volumes:
+      - .:/app
+      - /app/.venv
+    command: [ "python", "-m", "worker" ]
 
 #  modbus-sim:
 #    image: oitc/modbus-server:latest
